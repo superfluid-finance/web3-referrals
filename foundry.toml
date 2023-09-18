@@ -3,4 +3,9 @@ src = "src"
 out = "out"
 libs = ["lib"]
 
+remappings = [
+    '@superfluid-finance/ethereum-contracts=lib/superfluid-protocol-monorepo/packages/ethereum-contracts',
+    '@openzeppelin/=lib/openzeppelin-contracts/',
+]
+
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config
