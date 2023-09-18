@@ -19,4 +19,4 @@ The sum of shares for all levels cannot exceed 100% / 1e PPM.
 Prerequisite: [foundry](https://book.getfoundry.sh/) installed, `forge` in PATH.
 
 In order to install, clone the repository, then run `forge install`.
-Run tests with `forge test -vvv`
+Run tests with `forge test`

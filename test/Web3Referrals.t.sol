@@ -124,12 +124,30 @@ contract Web3ReferralsTest is Test {
         w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
         vm.startPrank(alice);
         superToken.createFlow(address(w3r), toI96(inFlowRate), abi.encode(bob));
-        // TODO check the flows
+
+        // bob shall get 10%
+        assertGe(
+            toU256(superToken.getFlowRate(address(w3r), bob)),
+            toU256(inFlowRate) * 10 / 100,
+            "wrong flowrate to bob"
+        );
+        // merchant shall get 90%
+        assertGe(
+            toU256(superToken.getFlowRate(address(w3r), merchant)),
+            toU256(inFlowRate) * 90 / 100,
+            "wrong flowrate to merchant"
+        );
     }
 
-    function testWithSuperTokenWithMinDeposit() public {
-        // TODO
-    }
+    // TODO: implement
+
+    /*
+    function testWithSuperTokenWithMinDeposit() public {}
+
+    function testUpdateInStream() public {}
+
+    function testCloseInStream() public {}
+    */
 
     // Helpers
 
