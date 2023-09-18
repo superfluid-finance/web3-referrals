@@ -61,6 +61,7 @@ contract Web3Referrals is SuperAppBaseFlow {
         int96 referrersOutflowRate;
         (referrersOutflowRate, newCtx) = adjustReferrersFlows(sender, 0, inFlowRate, newCtx);
 
+        // The remainder goes to the merchant
         int96 merchantFlowRate = inFlowRate - referrersOutflowRate;
         newCtx = createOrUpdateFlow(merchant, merchantFlowRate, newCtx);
     }
@@ -91,8 +92,9 @@ contract Web3Referrals is SuperAppBaseFlow {
     }
 
     /*
-    * Adjusts all the flows according to the referral fee.
-    * The remainder goes to the merchant
+    * Create/update flow for referrers according to the fee table.
+    * Uses recursion for multi-level referrals.
+    * Returns the total flowrate going to referrers.
     */
     function adjustReferrersFlows(address referree, uint8 level, int96 inFlowRate, bytes memory ctx) internal 
         returns (int96 addedOutFlowRate, bytes memory newCtx) 
