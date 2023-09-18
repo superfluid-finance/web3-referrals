@@ -5,17 +5,7 @@ import "forge-std/Test.sol";
 import "../src/Web3Referrals.sol";
 
 import { ERC1820RegistryCompiled } from "@superfluid-finance/ethereum-contracts/contracts/libs/ERC1820RegistryCompiled.sol";
-import {
-    SuperfluidFrameworkDeployer,
-    ISuperTokenFactory,
-    ERC20WithTokenInfo
-} from "@superfluid-finance/ethereum-contracts/contracts/utils/SuperfluidFrameworkDeployer.sol";
-import {
-    ISuperfluid,
-    ISuperToken
-} from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
-import { SuperToken } from "@superfluid-finance/ethereum-contracts/contracts/superfluid/SuperToken.sol";
-import { CFAv1Forwarder } from "@superfluid-finance/ethereum-contracts/contracts/utils/CFAv1Forwarder.sol";
+import { SuperfluidFrameworkDeployer } from "@superfluid-finance/ethereum-contracts/contracts/utils/SuperfluidFrameworkDeployer.sol";
 
 using SuperTokenV1Library for ISuperToken;
 
