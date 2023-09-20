@@ -53,8 +53,11 @@ contract Web3Referrals is SuperAppBaseFlow {
         if (userData.length != 0) {
             // get and persist referrer
             address referrer = abi.decode(userData, (address));
-            referrals[sender] = referrer;
-            // TODO: what if there's already a referrer set?´
+            // if the sender refers itself or a circular referral is created, ignore the referral
+            if (referrer != sender && referrals[referrer] != sender) {
+                referrals[sender] = referrer;
+                // TODO: what if there's already a referrer set?´
+            }
         }
 
         int96 inFlowRate = superToken.getFlowRate(sender, address(this));

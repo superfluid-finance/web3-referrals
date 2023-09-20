@@ -17,6 +17,7 @@ contract Web3ReferralsTest is Test {
     address alice = address(0x42);
     address bob = address(0x43);
     address dan = address(0x44);
+    address kaspar = address(0x45);
     address merchant = address(0x69);
 
     uint32[] emptyReferralFeeTable = new uint32[](0);
@@ -34,6 +35,11 @@ contract Web3ReferralsTest is Test {
         superToken.transfer(alice, 1e32);
         superToken.transfer(bob, 1e32);
         superToken.transfer(dan, 1e32);
+        superToken.transfer(kaspar, 1e32);
+
+        // arbitrary call to trigger lib initialization, in order to avoid an issue with expectRevert
+        // related to https://github.com/foundry-rs/foundry/issues/3901
+        superToken.increaseFlowRateAllowance(merchant, 1);
     }
 
     // For flowrate fuzzing, uint64 is a good input type
@@ -48,7 +54,25 @@ contract Web3ReferralsTest is Test {
 
         vm.startPrank(bob);
         // with referral address encoded in userData
-        superToken.createFlow(address(w3r), toI96(inFlowRate), abi.encode(bob));
+        superToken.createFlow(address(w3r), toI96(inFlowRate), abi.encode(alice));
+        assertEq(toU256(inFlowRate) * 2, toU256(superToken.getFlowRate(address(w3r), merchant)));
+    }
+
+     function testWithZeroLevels() public {
+        int96 inFlowRate = 1e12;
+        w3r = new Web3Referrals(sf.host, superToken, merchant, emptyReferralFeeTable);
+        vm.startPrank(alice);
+        uint256 gasBefore = gasleft();
+        // without referral address encoded in userData
+        superToken.createFlow(address(w3r), inFlowRate);
+        console.log("0 levels | gas consumed by alice:", gasBefore - gasleft());
+        assertEq(toU256(inFlowRate), toU256(superToken.getFlowRate(address(w3r), merchant)));
+
+        vm.startPrank(bob);
+        gasBefore = gasleft();
+        // with referral address encoded in userData
+        superToken.createFlow(address(w3r), inFlowRate, abi.encode(alice));
+        console.log("0 levels | gas consumed by bob:", gasBefore - gasleft());
         assertEq(toU256(inFlowRate) * 2, toU256(superToken.getFlowRate(address(w3r), merchant)));
     }
 
@@ -91,15 +115,21 @@ contract Web3ReferralsTest is Test {
         );
     }
 
-    function testWithTwoLevel() public {
+    function testWithTwoLevels() public {
         w3r = new Web3Referrals(sf.host, superToken, merchant, twoLevelReferralFeeTable);
         assertEq(twoLevelReferralFeeTable.length, 2, "wrong table size");
+
         vm.startPrank(bob);
+        uint256 gasBefore = gasleft();
         // bob was brought by dan
         superToken.createFlow(address(w3r), toI96(100e18), abi.encode(dan));
+        console.log("2 levels | gas consumed by bob:", gasBefore - gasleft());
+
         vm.startPrank(alice);
+        gasBefore = gasleft();
         // alice was brought by bob
         superToken.createFlow(address(w3r), toI96(100e18), abi.encode(bob));
+        console.log("2 levels | gas consumed by alice:", gasBefore - gasleft());
 
         // bob shall get 8% of one stream
         assertEq(8e18, toU256(superToken.getFlowRate(address(w3r), bob)), "wrong flowrate to bob");
@@ -107,9 +137,17 @@ contract Web3ReferralsTest is Test {
         assertEq(2e18 + 8e18, toU256(superToken.getFlowRate(address(w3r), dan)), "wrong flowrate to dan");
         // merchant shall get 92% of the first stream and 90% of the second stream
         assertEq(92e18 + 90e18, toU256(superToken.getFlowRate(address(w3r), merchant)), "wrong flowrate to merchant");
+
+        // one more stream, triggering only 1 flow creation, for measuring gas costs
+        vm.startPrank(kaspar);
+        gasBefore = gasleft();
+        // kaspar was brought by bob. So this triggers an update of 3 flows (to merchant, bob, dan) plus creation of 1 new one (from kaspar)
+        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(bob));
+        console.log("2 levels | gas consumed by kaspar:", gasBefore - gasleft());
+        assertEq(92e18 + 90e18 + 90e18, toU256(superToken.getFlowRate(address(w3r), merchant)), "wrong flowrate to merchant");
     }
 
-    function testFuzzWithOneLevel(uint64 inFlowRate) public {
+    function testFuzzWithOneLevels(uint64 inFlowRate) public {
         vm.assume(inFlowRate > 0);
         w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
         vm.startPrank(alice);
@@ -127,6 +165,21 @@ contract Web3ReferralsTest is Test {
             toU256(inFlowRate) * 90 / 100,
             "wrong flowrate to merchant"
         );
+    }
+
+    function testCantReferToSelf() public {
+        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        vm.startPrank(alice);
+        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(alice));
+        // referral ignored, full flowrate going to the merchant
+        assertEq(100e18, toU256(superToken.getFlowRate(address(w3r), merchant)));
+    }
+
+    function testStreamToEoa() public {
+        vm.startPrank(alice);
+        uint256 gasBefore = gasleft();
+        superToken.createFlow(bob, toI96(100e18), abi.encode(alice));
+        console.log("to EOA | gas consumed by alice:", gasBefore - gasleft());
     }
 
     // TODO: implement
