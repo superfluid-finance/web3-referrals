@@ -3,9 +3,13 @@ pragma solidity ^0.8.19;
 
 import "forge-std/Test.sol";
 import "../src/Web3Referrals.sol";
+import "../src/AddressCompressor.sol";
+import { AddressCompressorLib } from "../src/IAddressCompressor.sol";
 
 import { ERC1820RegistryCompiled } from "@superfluid-finance/ethereum-contracts/contracts/libs/ERC1820RegistryCompiled.sol";
 import { SuperfluidFrameworkDeployer } from "@superfluid-finance/ethereum-contracts/contracts/utils/SuperfluidFrameworkDeployer.sol";
+import { ISuperfluidGovernance, ISuperfluidToken } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
+import { SuperfluidGovernanceBase } from "@superfluid-finance/ethereum-contracts/contracts/gov/SuperfluidGovernanceBase.sol";
 
 using SuperTokenV1Library for ISuperToken;
 
@@ -13,6 +17,7 @@ contract Web3ReferralsTest is Test {
     Web3Referrals public w3r;
     SuperfluidFrameworkDeployer.Framework internal sf;
     ISuperToken internal superToken;
+    AddressCompressor addressCompressor;
 
     address alice = address(0x42);
     address bob = address(0x43);
@@ -20,29 +25,82 @@ contract Web3ReferralsTest is Test {
     address kaspar = address(0x45);
     address merchant = address(0x69);
 
+    // special referrers
+    address walletX = address(0xDDdDddDdDdddDDddDDddDDDDdDdDDdDDdDDDDDDd);
+    address platformX = address(0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC);
+
     uint32[] emptyReferralFeeTable = new uint32[](0);
     uint32[] oneLevelReferralFeeTable = [uint32(100000), uint32(20000)]; // 10% for first level
     uint32[] twoLevelReferralFeeTable = [uint32(80000), uint32(20000)]; // 8% for first level, 2% for second level
 
+    // =========== SETUP =============
+
     function setUp() public {
+        // deploy prerequisites for SF framework
         vm.etch(ERC1820RegistryCompiled.at, ERC1820RegistryCompiled.bin);
 
+        // deploy SF framework
         SuperfluidFrameworkDeployer deployer = new SuperfluidFrameworkDeployer();
         deployer.deployTestFramework();
         sf = deployer.getFramework();
 
+        // deploy SuperToken and distribute to accounts
         superToken = deployer.deployPureSuperToken("TestToken", "TST", 10e32);
         superToken.transfer(alice, 1e32);
         superToken.transfer(bob, 1e32);
         superToken.transfer(dan, 1e32);
         superToken.transfer(kaspar, 1e32);
 
-        // arbitrary call to trigger lib initialization, in order to avoid an issue with expectRevert
-        // related to https://github.com/foundry-rs/foundry/issues/3901
+        // deploy AddressCompressor, expected to exist at its deterministic address by Web3Referrals contract
+        addressCompressor = _deployAddressCompressorWithCreate2Proxy();
+
+        // see https://github.com/superfluid-finance/protocol-monorepo/issues/1697
         superToken.increaseFlowRateAllowance(merchant, 1);
     }
 
+    // deterministically deploys the AddressCompressor contract using CREATE2.
+    // Uses https://github.com/Arachnid/deterministic-deployment-proxy, available on any chain, also in foundry devnets.
+    // Note that the address will change with compiler or compiler settings (optimization, etc.) changes.
+    function _deployAddressCompressorWithCreate2Proxy() internal returns (AddressCompressor) {
+        address CREATE2_PROXY_DEPLOYER = address(0x4e59b44847b379578588920cA78FbF26c0B4956C);
+
+        // Deploying through the create2 proxy allows us to yield the same address regardless of who makes the tx
+        bytes memory ADDRESS_COMPRESSOR_CREATIONCODE = type(AddressCompressor).creationCode;
+        // Changing the salt will change the address it's deployed to!
+        bytes32 salt = keccak256(abi.encodePacked("AddressCompressor"));
+        // The only way to know the address the contract will be deployed to by the proxy is to compute it.
+        address computedAddr = address(uint160(uint256(keccak256(abi.encodePacked(
+            bytes1(0xff), CREATE2_PROXY_DEPLOYER, salt, keccak256(ADDRESS_COMPRESSOR_CREATIONCODE))))));
+        // the tx is the same as a normal contract creation tx, with 2 differences:
+        // * "to" shall be the proxy address instead of zero
+        // * "data": prepend the salt (packed) to the initcode of the contract to be deployed
+        (bool success,) = CREATE2_PROXY_DEPLOYER.call(abi.encodePacked(salt, ADDRESS_COMPRESSOR_CREATIONCODE));
+        assertTrue(success);
+        return AddressCompressor(computedAddr);
+    }
+
+    // =========== TESTS =============
+
     // For flowrate fuzzing, uint64 is a good input type
+
+    function testAddressCompressorIsAtExpectedAddress() public {
+        // make sure there's code at the expected address
+        assertGe(address(addressCompressor).code.length, 1, "no code at expected address for AddressCompressor");
+        // make sure the address matches the one hardcoded in the related lib
+        assertEq(address(addressCompressor), AddressCompressorLib.getDeployedAt(), "AddressCompressor not at expected address");
+    }
+
+    // smoke test the compressor. TODO: move to its own repo
+    function testAddressCompressor() public {
+        address someAddr = address(0x777);
+        bytes4 someCAddr = addressCompressor.getOrCreateCAddr(someAddr);
+        console.log("got cAddr:");
+        console.logBytes4(someCAddr);
+        assertEq(addressCompressor.getAddress(someCAddr), someAddr, "reverse lookup failed");
+
+        bytes4 someCAddrRetry = addressCompressor.getOrCreateCAddr(someAddr);
+        assertEq(someCAddrRetry, someCAddr, "doesn't return pre-existing cAddr");
+    }
 
     function testFuzzWithZeroLevels(uint64 inFlowRate) public {
         vm.assume(inFlowRate > 0);
@@ -170,19 +228,72 @@ contract Web3ReferralsTest is Test {
     function testCantReferToSelf() public {
         w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
         vm.startPrank(alice);
-        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(alice));
+        //superToken.createFlow(address(w3r), toI96(100e18), abi.encode(alice));
+        superToken.createFlow(address(w3r), toI96(100e18), 
+            abi.encode(alice));
         // referral ignored, full flowrate going to the merchant
         assertEq(100e18, toU256(superToken.getFlowRate(address(w3r), merchant)));
     }
 
-    function testStreamToEoa() public {
+    function testStreamWithOneSpecialReferrer() public {
+        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        // set up walletX as special referrer
+        uint32 walletXSharePm = 10000; // 1%
+        uint8 rType = 1; // we pretend 1 to mean wallets
+        // TODO: verify emitted event
+        bytes4 walletXCAddr = w3r.setSpecialReferrer(walletX, walletXSharePm, rType);
+
         vm.startPrank(alice);
-        uint256 gasBefore = gasleft();
-        superToken.createFlow(bob, toI96(100e18), abi.encode(alice));
-        console.log("to EOA | gas consumed by alice:", gasBefore - gasleft());
+        // alice is referred by bob and by special referrer walletX
+        bytes memory userData = abi.encodePacked(bytes4(0), bytes4(0), walletXCAddr, bob);
+        superToken.createFlow(address(w3r), toI96(100e18), userData);
+
+        assertEq(1e18, toU256(superToken.getFlowRate(address(w3r), walletX)), "wrong flowrate to walletX (special referrer)");
+        assertEq(10e18, toU256(superToken.getFlowRate(address(w3r), bob)), "wrong flowrate to bob");
+        assertEq(89e18, toU256(superToken.getFlowRate(address(w3r), merchant)), "wrong flowrate to merchant");
     }
 
-    // TODO: implement
+    function testStreamWithTwoSpecialReferrers() public {
+        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        // set up walletX as first special referrer
+        uint32 walletXSharePm = 10000; // 1%
+        uint8 walletXRType = 1; // we pretend 1 to mean wallets
+        bytes4 walletXCAddr = w3r.setSpecialReferrer(walletX, walletXSharePm, walletXRType);
+
+        // set up platformX as second special referrer
+        uint32 platformXSharePm = 30000; // 3%
+        uint8 platformXRType = 2; // we pretend 2 to mean platforms
+        bytes4 platformXCAddr = w3r.setSpecialReferrer(platformX, platformXSharePm, platformXRType);
+
+        vm.startPrank(alice);
+        // alice is referred by bob and by special referrers walletX and platformX
+        bytes memory userData = abi.encodePacked(bytes4(0), platformXCAddr, walletXCAddr, bob);
+        superToken.createFlow(address(w3r), toI96(100e18), userData);
+
+        assertEq(1e18, toU256(superToken.getFlowRate(address(w3r), walletX)), "wrong flowrate to walletX (special referrer)");
+        assertEq(3e18, toU256(superToken.getFlowRate(address(w3r), platformX)), "wrong flowrate to platformX (special referrer)");
+        assertEq(10e18, toU256(superToken.getFlowRate(address(w3r), bob)), "wrong flowrate to bob");
+        // TODO: this is slightly off due to deposit clipping. To be figured out
+        assertEq(86e18, toU256(superToken.getFlowRate(address(w3r), merchant)), "wrong flowrate to merchant");
+    }
+
+    function testHandleIncreasedMinDeposit() public {
+        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        vm.startPrank(alice);
+        // bob recommends alice
+        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(bob));
+
+        // referrer shall get 10%
+        assertEq(10e18, toU256(superToken.getFlowRate(address(w3r), bob)));
+        // merchant shall get 90%
+        assertEq(90e18, toU256(superToken.getFlowRate(address(w3r), merchant)));
+
+        // increase min deposit
+        ISuperfluidGovernance gov = sf.host.getGovernance();
+        (SuperfluidGovernanceBase(address(gov))).setSuperTokenMinimumDeposit(sf.host, ISuperfluidToken(address(0)), 10e18);
+    }
+
+    // TODO: additionally implement:
 
     /*
     function testWithSuperTokenWithMinDeposit() public {}
@@ -190,6 +301,14 @@ contract Web3ReferralsTest is Test {
     function testUpdateInStream() public {}
 
     function testCloseInStream() public {}
+
+    // Test case with changing min deposit:
+    // Alice creates subscription, sets dan as referrer
+    // Bob also subscribes with dan as referrer
+    // min deposit is dramatically increased
+    // Alice closes the stream, triggering an update of the flow to dan
+    // Question: can this cause the tx to be blocked because there's not enough app credit?
+
     */
 
     // Helpers
