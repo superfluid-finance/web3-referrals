@@ -10,6 +10,7 @@ import { ERC1820RegistryCompiled } from "@superfluid-finance/ethereum-contracts/
 import { SuperfluidFrameworkDeployer } from "@superfluid-finance/ethereum-contracts/contracts/utils/SuperfluidFrameworkDeployer.sol";
 import { ISuperfluidGovernance, ISuperfluidToken } from "@superfluid-finance/ethereum-contracts/contracts/interfaces/superfluid/ISuperfluid.sol";
 import { SuperfluidGovernanceBase } from "@superfluid-finance/ethereum-contracts/contracts/gov/SuperfluidGovernanceBase.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 
 using SuperTokenV1Library for ISuperToken;
 
@@ -28,6 +29,8 @@ contract Web3ReferralsTest is Test {
     // special referrers
     address walletX = address(0xDDdDddDdDdddDDddDDddDDDDdDdDDdDDdDDDDDDd);
     address platformX = address(0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC);
+    address protocolFeeRecipient = 0xfEe0f398a3a9E76eA141EaAF0b038C252F09c920;
+    uint32 defaultProtocolFeePm = 0;
 
     uint32[] emptyReferralFeeTable = new uint32[](0);
     uint32[] oneLevelReferralFeeTable = [uint32(100000), uint32(20000)]; // 10% for first level
@@ -79,6 +82,21 @@ contract Web3ReferralsTest is Test {
         return AddressCompressor(computedAddr);
     }
 
+    function _deployW3RContract(uint32[] memory feeTable) internal {
+        w3r = new Web3Referrals(sf.host, superToken, merchant, feeTable, protocolFeeRecipient, defaultProtocolFeePm);
+    }
+
+    function _deployW3RContract(uint32[] memory feeTable, uint32 protocolFee) internal {
+        w3r = new Web3Referrals(sf.host, superToken, merchant, feeTable, protocolFeeRecipient, protocolFee);
+    }
+
+    function _setMinDeposit(uint256 minDeposit) internal {
+        ISuperfluidGovernance gov = sf.host.getGovernance();
+        address govOwner = Ownable(address(gov)).owner();
+        vm.startPrank(govOwner);
+        (SuperfluidGovernanceBase(address(gov))).setSuperTokenMinimumDeposit(sf.host, ISuperfluidToken(address(0)), minDeposit);
+    }
+
     // =========== TESTS =============
 
     // For flowrate fuzzing, uint64 is a good input type
@@ -104,7 +122,7 @@ contract Web3ReferralsTest is Test {
 
     function testFuzzWithZeroLevels(uint64 inFlowRate) public {
         vm.assume(inFlowRate > 0);
-        w3r = new Web3Referrals(sf.host, superToken, merchant, emptyReferralFeeTable);
+        _deployW3RContract(emptyReferralFeeTable);
         vm.startPrank(alice);
         // without referral address encoded in userData
         superToken.createFlow(address(w3r), toI96(inFlowRate));
@@ -118,7 +136,8 @@ contract Web3ReferralsTest is Test {
 
      function testWithZeroLevels() public {
         int96 inFlowRate = 1e12;
-        w3r = new Web3Referrals(sf.host, superToken, merchant, emptyReferralFeeTable);
+        _deployW3RContract(emptyReferralFeeTable);
+        
         vm.startPrank(alice);
         uint256 gasBefore = gasleft();
         // without referral address encoded in userData
@@ -135,7 +154,7 @@ contract Web3ReferralsTest is Test {
     }
 
     function testWithOneLevel() public {
-        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        _deployW3RContract(oneLevelReferralFeeTable);
         vm.startPrank(alice);
         // bob recommends alice
         superToken.createFlow(address(w3r), toI96(100e18), abi.encode(bob));
@@ -149,7 +168,8 @@ contract Web3ReferralsTest is Test {
     function testReferTwice(uint64 inFlowRate1, uint64 inFlowRate2) public {
         vm.assume(inFlowRate1 > 0);
         vm.assume(inFlowRate2 > 0);
-        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        _deployW3RContract(oneLevelReferralFeeTable);
+        
         vm.startPrank(alice);
         // bob recommends alice
         superToken.createFlow(address(w3r), toI96(inFlowRate1), abi.encode(bob));
@@ -174,7 +194,7 @@ contract Web3ReferralsTest is Test {
     }
 
     function testWithTwoLevels() public {
-        w3r = new Web3Referrals(sf.host, superToken, merchant, twoLevelReferralFeeTable);
+        _deployW3RContract(twoLevelReferralFeeTable);
         assertEq(twoLevelReferralFeeTable.length, 2, "wrong table size");
 
         vm.startPrank(bob);
@@ -207,7 +227,7 @@ contract Web3ReferralsTest is Test {
 
     function testFuzzWithOneLevels(uint64 inFlowRate) public {
         vm.assume(inFlowRate > 0);
-        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        _deployW3RContract(oneLevelReferralFeeTable);
         vm.startPrank(alice);
         superToken.createFlow(address(w3r), toI96(inFlowRate), abi.encode(bob));
 
@@ -226,7 +246,7 @@ contract Web3ReferralsTest is Test {
     }
 
     function testCantReferToSelf() public {
-        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        _deployW3RContract(oneLevelReferralFeeTable);
         vm.startPrank(alice);
         //superToken.createFlow(address(w3r), toI96(100e18), abi.encode(alice));
         superToken.createFlow(address(w3r), toI96(100e18), 
@@ -236,7 +256,7 @@ contract Web3ReferralsTest is Test {
     }
 
     function testStreamWithOneSpecialReferrer() public {
-        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        _deployW3RContract(oneLevelReferralFeeTable);
         // set up walletX as special referrer
         uint32 walletXSharePm = 10000; // 1%
         uint8 rType = 1; // we pretend 1 to mean wallets
@@ -254,7 +274,7 @@ contract Web3ReferralsTest is Test {
     }
 
     function testStreamWithTwoSpecialReferrers() public {
-        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+        _deployW3RContract(oneLevelReferralFeeTable);
         // set up walletX as first special referrer
         uint32 walletXSharePm = 10000; // 1%
         uint8 walletXRType = 1; // we pretend 1 to mean wallets
@@ -277,20 +297,61 @@ contract Web3ReferralsTest is Test {
         assertEq(86e18, toU256(superToken.getFlowRate(address(w3r), merchant)), "wrong flowrate to merchant");
     }
 
-    function testHandleIncreasedMinDeposit() public {
-        w3r = new Web3Referrals(sf.host, superToken, merchant, oneLevelReferralFeeTable);
+    function testWithOneLevelAndProtocolFee() public {
+        // 0.3% protocol fee
+        _deployW3RContract(oneLevelReferralFeeTable, 3000);
         vm.startPrank(alice);
         // bob recommends alice
-        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(bob));
+        superToken.createFlow(address(w3r), toI96(1000e15), abi.encode(bob));
 
         // referrer shall get 10%
-        assertEq(10e18, toU256(superToken.getFlowRate(address(w3r), bob)));
+        assertEq(100e15, toU256(superToken.getFlowRate(address(w3r), bob)));
+        // protocol shall get 0.3%
+        assertEq(3e15, toU256(superToken.getFlowRate(address(w3r), protocolFeeRecipient)));
         // merchant shall get 90%
-        assertEq(90e18, toU256(superToken.getFlowRate(address(w3r), merchant)));
+        assertEq(897e15, toU256(superToken.getFlowRate(address(w3r), merchant)));
+    }
 
-        // increase min deposit
-        ISuperfluidGovernance gov = sf.host.getGovernance();
-        (SuperfluidGovernanceBase(address(gov))).setSuperTokenMinimumDeposit(sf.host, ISuperfluidToken(address(0)), 10e18);
+    // TODO: failing, because delete hook not yet implemented
+    function testCloseStreams() public {
+        _deployW3RContract(oneLevelReferralFeeTable);
+
+        vm.startPrank(alice);
+        // dan recommends alice
+        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(dan));
+
+        vm.startPrank(bob);
+        // dan recommends bob
+        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(dan));
+
+        // referrer shall get 10%
+        assertEq(20e18, toU256(superToken.getFlowRate(address(w3r), dan)));
+        // merchant shall get 90%
+        assertEq(180e18, toU256(superToken.getFlowRate(address(w3r), merchant)));
+
+        vm.startPrank(alice);
+        superToken.deleteFlow(alice, address(w3r));
+
+        assertEq(10e18, toU256(superToken.getFlowRate(address(w3r), dan)));
+        assertEq(90e18, toU256(superToken.getFlowRate(address(w3r), merchant)));
+    }
+
+    function testHandleIncreasedMinDeposit() public {
+        _deployW3RContract(oneLevelReferralFeeTable);
+
+        vm.startPrank(alice);
+        // dan recommends alice
+        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(dan));
+
+        vm.startPrank(bob);
+        // dan recommends bob
+        superToken.createFlow(address(w3r), toI96(100e18), abi.encode(dan));
+
+        // dramatic increase of min deposit
+        _setMinDeposit(10e18);
+
+        vm.startPrank(alice);
+        superToken.deleteFlow(alice, address(w3r));
     }
 
     // TODO: additionally implement:
@@ -301,6 +362,12 @@ contract Web3ReferralsTest is Test {
     function testUpdateInStream() public {}
 
     function testCloseInStream() public {}
+
+    function testReferrerEqualsSpecialReferrer() public {}
+
+    function testReferrerEqualsProtocolRecipient() public {}
+
+    function testCannotSettingCumulatedReferralFeesAbove100Percent() public {}
 
     // Test case with changing min deposit:
     // Alice creates subscription, sets dan as referrer

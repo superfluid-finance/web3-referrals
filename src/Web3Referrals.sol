@@ -22,9 +22,9 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
     uint8 constant MAX_LEVELS = 10;
 
     // Protocol fee per million
-    uint32 constant PROTOCOL_FEE_PM = 2500; // 0.25%
+    uint32 immutable PROTOCOL_FEE_PM;
     // TODO: what shall we put here?
-    address constant PROTOCOL_FEE_RECIPIENT = 0xfee0f398a3a9e76ea141eaaf0b038c252f09c920;
+    address immutable PROTOCOL_FEE_RECIPIENT;
 
     ISuperfluid public host;
     IConstantFlowAgreementV1 _cfa;
@@ -35,7 +35,10 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
     ISuperToken public acceptedSuperToken; // assumption: only 1 SuperToken accepted
     IAddressCompressor public addressCompressor = IAddressCompressor(AddressCompressorLib.getDeployedAt());
 
-    constructor(ISuperfluid host_, ISuperToken superToken_, address merchant_, uint32[] memory referralFeeTable_)
+    constructor(
+        ISuperfluid host_, ISuperToken superToken_, address merchant_, uint32[] memory referralFeeTable_, 
+        address protocolFeeRecipient_, uint32 protocolFeePm_
+    )
         SuperAppBaseFlow(host_, true, true, true, "")
     {
         host = host_;
@@ -48,6 +51,8 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
             revert INVALID_REFERRAL_FEE_TABLE();
         }
         referralFeeTable = referralFeeTable_;
+        PROTOCOL_FEE_RECIPIENT = protocolFeeRecipient_;
+        PROTOCOL_FEE_PM = protocolFeePm_;
     }
 
     function isAcceptedSuperToken(ISuperToken superToken) public view override returns (bool) {
@@ -62,7 +67,7 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
         bytes4 _reserved;
     }
 
-    function _decodeUserData(bytes memory userData) internal view returns (UserDataStruct memory) {
+    function _decodeUserData(bytes memory userData) internal pure returns (UserDataStruct memory) {
         address referrer = address(uint160(uint256(bytes32(userData))));
         // bytes4 takes the most significant bits, thus we need to shift left
         bytes4 specialReferrer1 = bytes4(bytes32(userData) << 64);
@@ -70,10 +75,10 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
         return UserDataStruct(referrer, specialReferrer1, specialReferrer2, bytes4(0));
     }
 
-    function printAppCredit(bytes memory ctx) internal {
+    function printAppCredit(bytes memory ctx) internal view {
         ISuperfluid.Context memory sfContext = host.decodeCtx(ctx);
-        console.log("app credit granted", sfContext.appCreditGranted);
-        console.log("app credit used", uint256(sfContext.appCreditUsed));
+        //console.log("app credit granted", sfContext.appCreditGranted);
+        //console.log("app credit used", uint256(sfContext.appCreditUsed));
     }
 
     function onFlowCreated(
@@ -88,6 +93,7 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
         int96 referrersOutflowRate = 0;
         int96 specialReferrer1OutFlowRate = 0;
         int96 specialReferrer2OutFlowRate = 0;
+        int96 protocolOutFlowRate = 0;
         printAppCredit(ctx);
         bytes memory userData = host.decodeCtx(ctx).userData;
         if (userData.length != 0) {
@@ -102,6 +108,8 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
             printAppCredit(newCtx);
             (specialReferrer2OutFlowRate, newCtx) = adjustSpecialReferrerFlow(parsedUserData.specialReferrer2, inFlowRate, newCtx);
             printAppCredit(newCtx);
+            (protocolOutFlowRate, newCtx) = adjustProtocolFlow(inFlowRate, newCtx);
+            printAppCredit(newCtx);
         }
 
         // see if clipping needs to be applied
@@ -110,7 +118,7 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
         int96 maxRemainingFr = _cfa.getMaximumFlowRateFromDeposit(superToken, remainingAppCredit);
         console.log("max remaining flow rate", uint256(uint96(maxRemainingFr)));
         // The remainder goes to the merchant
-        int96 merchantFlowRate = inFlowRate - (referrersOutflowRate + specialReferrer1OutFlowRate + specialReferrer2OutFlowRate);
+        int96 merchantFlowRate = inFlowRate - (referrersOutflowRate + specialReferrer1OutFlowRate + specialReferrer2OutFlowRate + protocolOutFlowRate);
         newCtx = createOrUpdateFlow(
             merchant,
             merchantFlowRate > maxRemainingFr ? maxRemainingFr : merchantFlowRate,
@@ -156,7 +164,7 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
         for (uint256 i = 0; i < levels; i++) {
             sumPPM += table[i];
         }
-        // the sum of the referral fees n't be more than 100%
+        // the sum of the referral fees can't be more than 100%
         return sumPPM <= 1e6;
     }
 
@@ -165,17 +173,19 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
         scaledFlowRate = flowRate * int96(uint96(scalingFactorPM)) / 1e6;
     }
 
-    function adjustProtocolFeeFlow(int96 inFlowRate, bytes memory ctx) internal
+    // creates or updates the flow to the protocol fee recipient
+    function adjustProtocolFlow(int96 inFlowRate, bytes memory ctx) internal
         returns (int96 addedOutFlowRate, bytes memory newCtx)
     {
         newCtx = ctx;
         addedOutFlowRate = getScaledFlowrate(inFlowRate, PROTOCOL_FEE_PM);
-        if (protocolFeeFlowRate > 0) { // may be 0 due to rounding if numbers get very small
-            console.log("adding flow for protocol fee", PROTOCOL_FEE_RECIPIENT, uint256(uint96((protocolFeeFlowRate))));
-            newCtx = createOrUpdateFlow(PROTOCOL_FEE_RECIPIENT, protocolFeeFlowRate, ctx);
+        if (addedOutFlowRate > 0) { // may be 0 due to rounding if numbers get very small
+            console.log("adding flow for protocol fee", PROTOCOL_FEE_RECIPIENT, uint256(uint96((addedOutFlowRate))));
+            newCtx = createOrUpdateFlow(PROTOCOL_FEE_RECIPIENT, addedOutFlowRate, ctx);
         }
     }
 
+    // resolves the caddr, then creates or updates the flow
     function adjustSpecialReferrerFlow(bytes4 specialReferrerCAddr, int96 inFlowRate, bytes memory ctx) internal
         returns (int96 addedOutFlowRate, bytes memory newCtx) 
     {
