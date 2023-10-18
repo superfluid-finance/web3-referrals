@@ -44,6 +44,14 @@ bytes memory userData = abi.encodePacked(reserved, specialReferrer2Id, specialRe
 
 If specified on contract creation, a protocol fee will also be taken from incoming streams.
 
+## Address Compressor
+
+`AddressCompressor.sol` is a simple contract which maps EVM addresses to 4-byte addresses aka _cAddr_.  
+This is done by simply incrementing an uint32 for every new entry and casting that to a hex value.  
+While this can of course cover only a small fraction of all possible addresses, it nevertheless provides a namespace as large as the ipv4 address namespace, which in the context of a blockchain is quite a lot.  
+The contract is deployed deterministically using https://github.com/Arachnid/deterministic-deployment-proxy and can thus be made available at the same address on most EVM networks.  
+Currently the contract is included in this repository, but should eventually be moved to its own repository.
+
 # Develop
 
 Prerequisite: [foundry](https://book.getfoundry.sh/) installed, `forge` in PATH.
