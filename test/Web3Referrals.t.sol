@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import "forge-std/Test.sol";
 import "../src/Web3Referrals.sol";
+import "../src/Web3ReferralsFactory.sol";
 import "../src/AddressCompressor.sol";
 import { AddressCompressorLib } from "../src/IAddressCompressor.sol";
 
@@ -30,11 +31,12 @@ contract Web3ReferralsTest is Test {
     address walletX = address(0xDDdDddDdDdddDDddDDddDDDDdDdDDdDDdDDDDDDd);
     address platformX = address(0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC);
     address protocolFeeRecipient = 0xfEe0f398a3a9E76eA141EaAF0b038C252F09c920;
-    uint32 defaultProtocolFeePm = 0;
 
     uint32[] emptyReferralFeeTable = new uint32[](0);
     uint32[] oneLevelReferralFeeTable = [uint32(100000), uint32(20000)]; // 10% for first level
     uint32[] twoLevelReferralFeeTable = [uint32(80000), uint32(20000)]; // 8% for first level, 2% for second level
+
+    event InstanceDeployed(address indexed instance);
 
     // =========== SETUP =============
 
@@ -83,7 +85,7 @@ contract Web3ReferralsTest is Test {
     }
 
     function _deployW3RContract(uint32[] memory feeTable) internal {
-        w3r = new Web3Referrals(sf.host, superToken, merchant, feeTable, protocolFeeRecipient, defaultProtocolFeePm);
+        w3r = new Web3Referrals(sf.host, superToken, merchant, feeTable, protocolFeeRecipient, 0);
     }
 
     function _deployW3RContract(uint32[] memory feeTable, uint32 protocolFee) internal {
@@ -273,6 +275,7 @@ contract Web3ReferralsTest is Test {
         assertEq(89e18, toU256(superToken.getFlowRate(address(w3r), merchant)), "wrong flowrate to merchant");
     }
 
+    // TODO: Failing due to deposit clipping slightly changing the flowrate to the merchant
     function testStreamWithTwoSpecialReferrers() public {
         _deployW3RContract(oneLevelReferralFeeTable);
         // set up walletX as first special referrer
@@ -293,7 +296,6 @@ contract Web3ReferralsTest is Test {
         assertEq(1e18, toU256(superToken.getFlowRate(address(w3r), walletX)), "wrong flowrate to walletX (special referrer)");
         assertEq(3e18, toU256(superToken.getFlowRate(address(w3r), platformX)), "wrong flowrate to platformX (special referrer)");
         assertEq(10e18, toU256(superToken.getFlowRate(address(w3r), bob)), "wrong flowrate to bob");
-        // TODO: this is slightly off due to deposit clipping. To be figured out
         assertEq(86e18, toU256(superToken.getFlowRate(address(w3r), merchant)), "wrong flowrate to merchant");
     }
 
@@ -308,7 +310,7 @@ contract Web3ReferralsTest is Test {
         assertEq(100e15, toU256(superToken.getFlowRate(address(w3r), bob)));
         // protocol shall get 0.3%
         assertEq(3e15, toU256(superToken.getFlowRate(address(w3r), protocolFeeRecipient)));
-        // merchant shall get 90%
+        // merchant shall get 89.7%
         assertEq(897e15, toU256(superToken.getFlowRate(address(w3r), merchant)));
     }
 
@@ -354,6 +356,27 @@ contract Web3ReferralsTest is Test {
         superToken.deleteFlow(alice, address(w3r));
     }
 
+    function testFactory() public {
+        // 0.4% protocol fee
+        Web3ReferralsFactory factory = new Web3ReferralsFactory(sf.host, protocolFeeRecipient, 4000);
+
+        // TODO: how can I verify that the address argument emitted in the event matches the one returned?
+        vm.expectEmit(false, false, false, false);
+        emit InstanceDeployed(address(0));
+        w3r = factory.deployInstance(superToken, merchant, oneLevelReferralFeeTable);
+
+        vm.startPrank(alice);
+        // bob recommends alice
+        superToken.createFlow(address(w3r), toI96(1000e15), abi.encode(bob));
+
+        // referrer shall get 10%
+        assertEq(100e15, toU256(superToken.getFlowRate(address(w3r), bob)));
+        // protocol shall get 0.4%
+        assertEq(4e15, toU256(superToken.getFlowRate(address(w3r), protocolFeeRecipient)));
+        // merchant shall get 89.6%
+        assertEq(896e15, toU256(superToken.getFlowRate(address(w3r), merchant)));
+    }
+
     // TODO: additionally implement:
 
     /*
@@ -367,7 +390,7 @@ contract Web3ReferralsTest is Test {
 
     function testReferrerEqualsProtocolRecipient() public {}
 
-    function testCannotSettingCumulatedReferralFeesAbove100Percent() public {}
+    function testCannotSettingCumulatedReferralFeesAbove100Percent() public {}  
 
     // Test case with changing min deposit:
     // Alice creates subscription, sets dan as referrer

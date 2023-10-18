@@ -6,6 +6,7 @@ import { SuperAppBaseFlow } from "@superfluid-finance/ethereum-contracts/contrac
 import { SuperTokenV1Library } from "@superfluid-finance/ethereum-contracts/contracts/apps/SuperTokenV1Library.sol";
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IAddressCompressor, AddressCompressorLib } from "./IAddressCompressor.sol";
+// TODO: remove
 import "forge-std/console.sol";
 
 using SuperTokenV1Library for ISuperToken;
@@ -14,17 +15,28 @@ using SuperTokenV1Library for ISuperToken;
 * TODO: SuperAppBaseFlow assumes we'll use a EOA deployer. We'll not!
 */
 contract Web3Referrals is SuperAppBaseFlow, Ownable {
-    error NOT_ACCEPTED_SUPERTOKEN();
-    error INVALID_REFERRAL_FEE_TABLE();
+
+    // data structure expected in userData. All fields are optional.
+    struct UserDataStruct {
+        address referrer; // the organic referrer
+        bytes4 specialReferrer1; // first special referrer
+        bytes4 specialReferrer2; // second special referrer
+        bytes4 _reserved;
+    }
+
+    struct SpecialReferrerInfo {
+        bytes4 cAddr; // compressed address
+        uint32 referralFeeSharePM; // fee share per million
+        uint8 rType; // informal type with no effect on the contract behaviour
+    }
 
     // Max number of levels the referral is allowed to have
     // Needs to be set such that the block gas limit cannot be exceeded
     uint8 constant MAX_LEVELS = 10;
 
+    address immutable PROTOCOL_FEE_RECIPIENT;
     // Protocol fee per million
     uint32 immutable PROTOCOL_FEE_PM;
-    // TODO: what shall we put here?
-    address immutable PROTOCOL_FEE_RECIPIENT;
 
     ISuperfluid public host;
     IConstantFlowAgreementV1 _cfa;
@@ -34,6 +46,12 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
     mapping (address referree => address referrer) public referrals;
     ISuperToken public acceptedSuperToken; // assumption: only 1 SuperToken accepted
     IAddressCompressor public addressCompressor = IAddressCompressor(AddressCompressorLib.getDeployedAt());
+    mapping (address referrer => SpecialReferrerInfo) public specialReferrerInfos;
+
+    event SpecialReferrerSet(address referrer, bytes4 cAddr, uint32 referralFeeSharePM, uint8 rType);
+
+    error NOT_ACCEPTED_SUPERTOKEN();
+    error INVALID_REFERRAL_FEE_TABLE();
 
     constructor(
         ISuperfluid host_, ISuperToken superToken_, address merchant_, uint32[] memory referralFeeTable_, 
@@ -59,14 +77,6 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
         return superToken == acceptedSuperToken;
     }
 
-    // data structure expected in userData. All fields are optional.
-    struct UserDataStruct {
-        address referrer; // the organic referrer
-        bytes4 specialReferrer1; // first special referrer
-        bytes4 specialReferrer2; // second special referrer
-        bytes4 _reserved;
-    }
-
     function _decodeUserData(bytes memory userData) internal pure returns (UserDataStruct memory) {
         address referrer = address(uint160(uint256(bytes32(userData))));
         // bytes4 takes the most significant bits, thus we need to shift left
@@ -76,7 +86,7 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
     }
 
     function printAppCredit(bytes memory ctx) internal view {
-        ISuperfluid.Context memory sfContext = host.decodeCtx(ctx);
+        //ISuperfluid.Context memory sfContext = host.decodeCtx(ctx);
         //console.log("app credit granted", sfContext.appCreditGranted);
         //console.log("app credit used", uint256(sfContext.appCreditUsed));
     }
@@ -130,21 +140,10 @@ contract Web3Referrals is SuperAppBaseFlow, Ownable {
     //function onFlowUpdated
     //function onFlowDeleted
 
-
     // =========== Special referrer setup ===========
 
-    struct SpecialReferrerInfo {
-        bytes4 cAddr; // compressed address
-        uint32 referralFeeSharePM; // fee share per million
-        uint8 rType;
-    }
-
-    event SpecialReferrerSet(address referrer, bytes4 cAddr, uint32 referralFeeSharePM, uint8 rType);
-    mapping (address referrer => SpecialReferrerInfo) public specialReferrerInfos;
-
-
     // allows the contract owner to designate special referrers which can be set alongside organic referrers
-    // @param rType is just informal, it's up to the frontend to interpret it.
+    // @param rType (referrer type) is informal and has no effect on the contract behaviour
     function setSpecialReferrer(address referrer, uint32 referralFeeSharePM, uint8 rType) external onlyOwner returns (bytes4) {
         bytes4 cAddr = addressCompressor.getOrCreateCAddr(referrer);
         specialReferrerInfos[referrer] = SpecialReferrerInfo(cAddr, referralFeeSharePM, rType);
